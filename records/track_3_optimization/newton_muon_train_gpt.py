@@ -208,7 +208,7 @@ class Block(nn.Module):
         self.norm1 = RMSNorm(dim)
         self.norm2 = RMSNorm(dim)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, precond_flag: bool = False):
         x = x + self.attn(self.norm1(x), precond_flag=precond_flag)
         x = x + self.mlp(self.norm2(x), precond_flag=precond_flag)
         return x
