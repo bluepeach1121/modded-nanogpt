@@ -184,7 +184,7 @@ def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
         X = X.mT
     return X
 
-#@torch.compile
+@torch.compile
 def muon_update(grad, momentum, mu=0.95, nesterov=True):
     momentum.lerp_(grad, 1 - mu)
     update = grad.lerp_(momentum, mu) if nesterov else momentum
@@ -252,7 +252,7 @@ print0("="*100)
 
 val_tokens = 20 * 524288
 batch_size = 8 * 64 * 1024
-mbs = 64
+mbs = 16
 train_loader = distributed_data_generator("data/fineweb10B/fineweb_train_*.bin", batch_size)
 val_inputs, val_targets = next(distributed_data_generator("data/fineweb10B/fineweb_val_*.bin", val_tokens))
 
