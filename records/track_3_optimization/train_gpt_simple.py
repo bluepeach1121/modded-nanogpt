@@ -184,7 +184,7 @@ def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
         X = X.mT
     return X
 
-@torch.compile
+#@torch.compile
 def muon_update(grad, momentum, mu=0.95, nesterov=True):
     momentum.lerp_(grad, 1 - mu)
     update = grad.lerp_(momentum, mu) if nesterov else momentum
@@ -257,7 +257,7 @@ train_loader = distributed_data_generator("data/fineweb10B/fineweb_train_*.bin",
 val_inputs, val_targets = next(distributed_data_generator("data/fineweb10B/fineweb_val_*.bin", val_tokens))
 
 model = GPT(vocab_size=50304, num_layers=12, model_dim=768).cuda()
-model.compile(dynamic=False)
+#model.compile(dynamic=False)
 
 
 ########################################
