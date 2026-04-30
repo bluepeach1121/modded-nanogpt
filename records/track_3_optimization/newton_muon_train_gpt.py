@@ -209,8 +209,8 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(dim)
 
     def forward(self, x: Tensor):
-        x = x + self.attn(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
+        x = x + self.attn(self.norm1(x), precond_flag=precond_flag)
+        x = x + self.mlp(self.norm2(x), precond_flag=precond_flag)
         return x
 
 class GPT(nn.Module):
