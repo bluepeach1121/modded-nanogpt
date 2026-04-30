@@ -343,10 +343,22 @@ for step in range(train_steps + 1):
     for name, p in model.named_parameters():
         assert p.grad is not None, name
         dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+    ########### additionbelow
+    for name, p in model.named_parameters():
+        if not torch.isfinite(p.grad).all():
+            print0(f"NONFINITE GRAD at step {step}: {name}", console=True)
+            raise RuntimeError("nonfinite grad")
+    ########## additionabove
     # set optimization hyperparameters and take a step
     set_hparams(step)
     for opt in optimizers:
         opt.step()
+    ######### additionbelow
+    for name, p in model.named_parameters():
+        if not torch.isfinite(p).all():
+            print0(f"NONFINITE PARAM at step {step}: {name}", console=True)
+            raise RuntimeError("nonfinite param")
+    #########additionabove
     model.zero_grad(set_to_none=True)
     approx_training_time = training_time + (time.perf_counter() - t0)
     print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time:.3f}s"
