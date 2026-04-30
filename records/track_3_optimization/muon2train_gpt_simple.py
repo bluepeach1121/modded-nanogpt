@@ -58,12 +58,10 @@ def distributed_data_generator(filename_pattern: str, batch_size: int, seq_len=1
 #             Architecture             #
 ########################################
 
-#def norm(x: Tensor):
-#    return F.rms_norm(x, (x.size(-1),))
-
 def norm(x: Tensor):
-    x = x.float()
-    return x * torch.rsqrt(x.square().mean(dim=-1, keepdim=True) + 1e-6)
+    return F.rms_norm(x, (x.size(-1),))
+
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim):
@@ -189,18 +187,22 @@ def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
     return X
 
 @torch.compile
-def muon_update(grad, momentum, mu=0.95, nesterov=True):
+def muon2_update(grad, momentum, velocity, mu=0.95, beta2=0.9, eps=1e-8, nesterov=True):
     momentum.lerp_(grad, 1 - mu)
-    update = grad.lerp_(momentum, mu) if nesterov else momentum
-    update = zeropower_via_newtonschulz5(update)
-    update *= max(1, grad.size(-2) / grad.size(-1))**0.5
+    velocity.lerp_(grad.square(), 1 - beta2)
+
+    m = grad.lerp_(momentum, mu) if nesterov else momentum
+    m = m / (velocity.sqrt() + eps)
+
+    update = zeropower_via_newtonschulz5(m)
+    update *= max(1, grad.size(-2) / grad.size(-1)) ** 0.5
     return update
 
-class Muon(torch.optim.Optimizer):
-    def __init__(self, params, lr=0.02, weight_decay=0, mu=0.95):
+class Muon2(torch.optim.Optimizer):
+    def __init__(self, params, lr=0.02, weight_decay=0, mu=0.95, beta2=0.9, eps=1e-8):
         assert isinstance(params, list) and len(params) >= 1 and isinstance(params[0], torch.nn.Parameter)
         params = sorted(params, key=lambda x: x.size(), reverse=True)
-        defaults = dict(lr=lr, weight_decay=weight_decay, mu=mu)
+        defaults = dict(lr=lr, weight_decay=weight_decay, mu=mu, beta2=beta2, eps=eps)
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -216,7 +218,15 @@ class Muon(torch.optim.Optimizer):
                     state = self.state[p]
                     if len(state) == 0:
                         state["momentum"] = torch.zeros_like(p)
-                    update = muon_update(p.grad, state["momentum"], mu=group["mu"])
+                        state["velocity"] = torch.zeros_like(p)
+                    update = muon2_update(
+                                          p.grad,
+                                          state["momentum"],
+                                          state["velocity"], 
+                                          mu=group["mu"],
+                                          beta2=group["beta2"],
+                                          eps= group["eps"]
+                                          )
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update, alpha=-group["lr"])
                 dist.all_gather(params_pad[base_i:base_i + world_size], params_pad[base_i + rank])
@@ -281,8 +291,13 @@ optimizer1 = AdamW([dict(params=[model.embed.weight], lr=0.3),
                     dict(params=[model.proj.weight], lr=1/320),
                     dict(params=[p for p in model.parameters() if p.ndim < 2], lr=0.01)],
                    betas=(0.8, 0.95), eps=1e-10, weight_decay=0, fused=True)
-optimizer2 = Muon([p for p in model.blocks.parameters() if p.ndim >= 2],
-                  lr=0.025, weight_decay=0.0125)
+optimizer2 = Muon2(
+    [p for p in model.blocks.parameters() if p.ndim >= 2],
+    lr=0.025, 
+    weight_decay=0.0125,
+    mu=0.95,
+    beta2 = 0.9,
+    eps=1e-8)
 optimizers = [optimizer1, optimizer2]
 assert set(p for opt in optimizers for group in opt.param_groups
            for p in group["params"]) == set(model.parameters())
