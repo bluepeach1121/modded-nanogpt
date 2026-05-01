@@ -467,7 +467,7 @@ print0("="*100)
 
 val_tokens = 20 * 524288
 batch_size = 8 * 64 * 1024
-mbs = 32
+mbs = 64
 train_loader = distributed_data_generator("data/fineweb10B/fineweb_train_*.bin", batch_size)
 val_inputs, val_targets = next(distributed_data_generator("data/fineweb10B/fineweb_val_*.bin", val_tokens))
 
