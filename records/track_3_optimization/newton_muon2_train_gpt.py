@@ -268,14 +268,22 @@ def newton_muon2_update(grad, momentum, velocity, mu=0.95, beta2=0.9, eps=1e-8, 
     update *= max(1, grad.size(-2) / grad.size(-1))**0.5
     return update
 
+@torch.no_grad()
+def apply_update_weight_floor(update: Tensor, weight: Tensor, floor: float = 0.35, eps: float = 1e-12) -> Tensor:
+    # Enforce ||u||_F / ||w||_F >= floor.
+    # If update is already large enough, leave it unchanged.
+    u_norm = update.float().norm()
+    w_norm = weight.float().norm()
+
+    target = floor * w_norm
+    if u_norm < target:
+        update = update * (target / (u_norm + eps)).type_as(update)
+
+    return update
+
 class NewtonMuon2(torch.optim.Optimizer):
     """
-    Track-3-shaped Newton-Muon².
-
-    This preserves train_gpt_simple.py's architecture, data path, LR schedule, and
-    distributed Muon update pattern while adding the Newton-Muon right preconditioner:
-        raw grad -> grad @ inv(E[z z^T] + ridge) -> Muon momentum + second moment -> Newton-Schulz.
-
+     Newton-Muon².
     Activation second moments are collected only on refresh steps. The MLP projection
     uses four block-diagonal dxd preconditioners for its 4d input, matching the
     Newton-Muon repository implementation for contraction matrices.
@@ -283,7 +291,8 @@ class NewtonMuon2(torch.optim.Optimizer):
     def __init__(self, params, lr=0.02, weight_decay=0, mu=0.95, beta2=0.9, eps=1e-8,
                  precond_beta=0.95, precond_ridge_mult=0.2,
                  precond_init_diag=1e-3, precond_eps=1e-8,
-                 refresh_interval=32):
+                 refresh_interval=32, 
+                 update_weight_floor=0.35):
         assert isinstance(params, list) and len(params) >= 1 and isinstance(params[0], torch.nn.Parameter)
         params = sorted(params, key=lambda x: x.size(), reverse=True)
         defaults = dict(lr=lr, weight_decay=weight_decay, mu=mu, beta2=beta2, eps=eps)
@@ -293,6 +302,7 @@ class NewtonMuon2(torch.optim.Optimizer):
         self.precond_init_diag = float(precond_init_diag)
         self.precond_eps = float(precond_eps)
         self.refresh_interval = int(refresh_interval)
+        self.update_weight_floor = float(update_weight_floor)
         self.global_step = 0
         self._precond_ready = False
 
@@ -426,6 +436,13 @@ class NewtonMuon2(torch.optim.Optimizer):
                         beta2=group["beta2"],
                         eps=group["eps"],
                     )
+
+                    update = apply_update_weight_floor(
+                        update,
+                        p,
+                        floor= self.update_weight_floor
+                    )
+
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update, alpha=-group["lr"])
                 dist.all_gather(params_pad[base_i:base_i + world_size], params_pad[base_i + rank])
@@ -480,7 +497,7 @@ model.compile(dynamic=False)
 ########################################
 
 # we want to minimize this while still reaching 3.28 val loss
-train_steps = 3500
+train_steps = 3375
 
 # initialize model parameters
 for name, p in model.named_parameters():
@@ -504,6 +521,7 @@ optimizer2 = NewtonMuon2(
     precond_init_diag=1e-3,
     precond_eps=1e-8,
     refresh_interval=32,
+    update_weight_floor=0.35
 )
 optimizers = [optimizer1, optimizer2]
 assert set(p for opt in optimizers for group in opt.param_groups
