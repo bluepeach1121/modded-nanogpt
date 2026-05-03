@@ -255,8 +255,32 @@ def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
         X = X.mT
     return X
 
+
+def scale_to_unit_operator_norm(G: Tensor, eps: float = 1e-10) -> Tensor:
+    X = G.float()
+    v = torch.ones(X.size(-1), dtype=X.dtype, device=X.device)
+    v = v / torch.clamp(v.norm(), min=eps)
+
+    for _ in range(5):
+        u = X @ v
+        u = u / torch.clamp(u.norm(), min=eps)
+
+        v = X.mT @ u
+        v = v / torch.clamp(v.norm(), min=eps)
+
+    op_norm = torch.clamp((X @ v).norm(), min=eps)
+    return G / op_norm.to(G.dtype)
+
+
 @torch.compile
-def newton_muon2_update(grad, momentum, velocity, mu=0.95, beta2=0.9, eps=1e-8, nesterov=True):
+def newton_muon2_update(grad, 
+                        momentum, 
+                        velocity, 
+                        mu=0.95, 
+                        beta2=0.9, 
+                        eps=1e-8, 
+                        nesterov=True,
+                        contra_muon=0.5):
     # grad is already activation-right-preconditioned by Newton-Muon.
     # Muon² adds Adam-style second-moment scaling before Newton-Schulz.
     momentum.lerp_(grad, 1 - mu)
@@ -264,7 +288,13 @@ def newton_muon2_update(grad, momentum, velocity, mu=0.95, beta2=0.9, eps=1e-8, 
 
     update = grad.lerp_(momentum, mu) if nesterov else momentum
     update = update / (velocity.sqrt() + eps)
+    normalized_grad = scale_to_unit_operator_norm(update.clone())    
+
     update = zeropower_via_newtonschulz5(update)
+    opower_frobenius_norm = update.norm()
+    #from contra-muon implemetation
+    update = update - contra_muon / 2 * normalized_grad
+    update = update * opower_frobenius_norm / torch.clamp(update.norm(), min=1e-10)
     update *= max(1, grad.size(-2) / grad.size(-1))**0.5
     return update
 
@@ -292,7 +322,8 @@ class NewtonMuon2(torch.optim.Optimizer):
                  precond_beta=0.95, precond_ridge_mult=0.2,
                  precond_init_diag=1e-3, precond_eps=1e-8,
                  refresh_interval=32, 
-                 update_weight_floor=0.35):
+                 update_weight_floor=0.35,
+                 contra_muon=0.5):
         assert isinstance(params, list) and len(params) >= 1 and isinstance(params[0], torch.nn.Parameter)
         params = sorted(params, key=lambda x: x.size(), reverse=True)
         defaults = dict(lr=lr, weight_decay=weight_decay, mu=mu, beta2=beta2, eps=eps)
@@ -303,8 +334,10 @@ class NewtonMuon2(torch.optim.Optimizer):
         self.precond_eps = float(precond_eps)
         self.refresh_interval = int(refresh_interval)
         self.update_weight_floor = float(update_weight_floor)
+        self.contra_muon = float(contra_muon)
         self.global_step = 0
         self._precond_ready = False
+        
 
     def precond_flag_for_step(self, step: int) -> bool:
         # Faithful to the repo: t = step + 1, so first capture/refresh is step 31 for interval=32.
@@ -435,6 +468,7 @@ class NewtonMuon2(torch.optim.Optimizer):
                         mu=group["mu"],
                         beta2=group["beta2"],
                         eps=group["eps"],
+                        contra_muon=self.contra_muon
                     )
 
                     update = apply_update_weight_floor(
@@ -521,7 +555,8 @@ optimizer2 = NewtonMuon2(
     precond_init_diag=1e-3,
     precond_eps=1e-8,
     refresh_interval=32,
-    update_weight_floor=0.35
+    update_weight_floor=0.35,
+    contra_muon=0.5
 )
 optimizers = [optimizer1, optimizer2]
 assert set(p for opt in optimizers for group in opt.param_groups
