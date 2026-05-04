@@ -545,8 +545,8 @@ optimizer1 = AdamW([dict(params=[model.embed.weight], lr=0.3),
                    betas=(0.8, 0.95), eps=1e-10, weight_decay=0, fused=True)
 optimizer2 = NewtonMuon2(
     [p for p in model.blocks.parameters() if p.ndim >= 2],
-    lr=0.0375,
-    weight_decay=0.027,
+    lr=0.037,
+    weight_decay=0.025,
     mu=0.95,
     beta2=0.9,
     eps=1e-8,
@@ -556,7 +556,7 @@ optimizer2 = NewtonMuon2(
     precond_eps=1e-8,
     refresh_interval=32,
     update_weight_floor=0.35,
-    contra_muon=0.5
+    contra_muon=0.4
 )
 optimizers = [optimizer1, optimizer2]
 assert set(p for opt in optimizers for group in opt.param_groups
